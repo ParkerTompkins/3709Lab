@@ -1,0 +1,209 @@
+//DC motor Control with Encoder, Interrupt Driven.
+
+const int MOTOR=5, Enc2=3, Enc1=2, in1=6, in2=7;   
+volatile unsigned long time=0, dt=1, time_old=0;     //micros overflow every 70mins.
+volatile double speed=0, rpm=0, avgRPM=0, cumRPM=0, PID=0,kp=1, ki=1, kd=0, error=0, lastError=0, cumError=0, rateError=0; 
+volatile unsigned int setSpeed=0, counter=1; 
+unsigned int filterConst=3;    
+unsigned int mode=0, maxSpeed=5200;
+
+
+
+void ISR1();
+void readSerial();
+int panelLED(int LEDmode);
+void blinkLED();    //NOT FINISHED
+//double computePID(double inpSPEED);
+
+
+/*************************************************************************/
+void setup()
+{
+    Serial.begin(250000);
+    pinMode (MOTOR, OUTPUT);
+    pinMode (11, OUTPUT);   //for panelLED
+    pinMode (12, OUTPUT);
+    pinMode (Enc2, INPUT);
+    pinMode (Enc1, INPUT);
+    pinMode (in1, OUTPUT);
+    pinMode (in2, OUTPUT);
+    attachInterrupt(digitalPinToInterrupt(Enc2), ISR1, RISING);
+    
+    panelLED(1);
+
+    digitalWrite(in1, HIGH);
+}
+
+
+/************************************************************************/
+
+
+void loop()
+{
+  readSerial();
+
+  if(dt>20)rpm =  5000000 / (double)dt;
+  
+  cumRPM += rpm;
+  if(!(counter++ % filterConst))  
+  {
+    avgRPM = cumRPM / filterConst;
+    cumRPM = 0;
+    counter = 1;
+  }
+  
+  if((micros() - time_old) > 200000) 
+  {
+    avgRPM = 0;
+    dt = 0;
+  }
+  
+  error = setSpeed - avgRPM;
+  if(dt>20)
+  {
+    cumError =+ error * dt;   //integration
+    //rateError = (error - lastError)/dt;   //derivation
+  }
+  lastError = error;
+  PID = kp*error + ki*cumError + kd*rateError;
+  PID = constrain(PID, 0, 0xFF);
+  
+  analogWrite(MOTOR, PID);
+
+
+  Serial.print(avgRPM);
+  Serial.print("\t");
+  Serial.print(setSpeed);
+  Serial.print("\t");
+  Serial.print(PID);
+  Serial.print("\t");
+  Serial.print(dt);
+  Serial.print("\t");
+  Serial.print(kp);
+  Serial.print("\t");
+  Serial.println(ki);
+
+}
+
+
+/*************************************************************************************************************/
+
+
+void ISR1()
+{
+  time = micros();
+  dt = time - time_old;
+  time_old = time;
+ 
+}
+
+
+
+int panelLED(int LEDmode)   //1=green  2=red
+{
+  switch (LEDmode)
+  {
+    default:
+    case 0:
+    {
+      digitalWrite(11, 0);
+      digitalWrite(12, 0);
+      break;
+    }
+    case 1:   //green
+    {
+      digitalWrite(11, 1);
+      digitalWrite(12, 0);
+      break;
+    }
+    case 2:   //red
+    {
+      digitalWrite(11, 0);
+      digitalWrite(12, 1);
+      break;
+    }
+  }
+ return LEDmode;
+}
+
+
+void readSerial()
+{
+  while (Serial.available() > 0) 
+   {
+      mode = panelLED(2);
+      unsigned char inByte = Serial.read();
+      switch (inByte)
+      {
+        case '\n':
+        case '\r':
+        default:
+        {
+          break;
+        }
+        case 'f':
+        {
+          digitalWrite(in1, 1);
+          digitalWrite(in2, 0);
+          break;
+        }       
+        case 'r':
+        {
+          digitalWrite(in1, 0);
+          digitalWrite(in2, 1);
+          break;
+        }
+        case 'p':
+        {
+          kp = Serial.parseInt();
+          break;
+        }
+        case 'i':
+        {
+          ki = Serial.parseInt();
+          break;
+        }
+        case 'd':
+        {
+          kd = Serial.parseInt();
+          break;
+        }
+        case 's':
+        {
+          setSpeed = Serial.parseInt();
+          setSpeed = constrain(setSpeed, 0, maxSpeed);    //PWM is only 8 bits. Works in increments of 20 to 22 (i.e. s20=0, but s22=1)  
+          break;
+        }
+        case 'c':
+        {
+          Calibrate();
+          break;
+        }
+      } 
+   }
+   if(mode == 2) 
+  {
+    delay(100);
+    mode = panelLED(1);
+  }
+}
+
+void Calibrate()
+{
+  unsigned long calCounter = 1000000;
+  digitalWrite(MOTOR,0xFF);
+  delay(1000);
+  filterConst = 100;
+  while(calCounter--)
+  {
+    if(rpm > maxSpeed)   maxSpeed = avgRPM;
+    //Serial.print("\t");
+    //Serial.print(avgRPM);
+    //Serial.print("\t");
+    //Serial.println(calCounter);
+  }
+
+  filterConst = 3;
+  digitalWrite(MOTOR, 0);
+  delay(3000);
+}
