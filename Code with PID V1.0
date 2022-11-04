@@ -1,0 +1,204 @@
+//DC motor Control with Encoder, Interrupt Driven.
+//#inlcude <PID_V1.h>
+const int MOTOR=5, Enc2=3, Enc1=2, in1=6, in2=7;   
+unsigned long time=0,dt=1, time_old=0;
+double kp, ki, kd;                      //micros overflow every 70mins.
+double rpm=0;    
+unsigned int setSpeed=0, speed=0, mode=0, dutyCycle=0;
+unsigned long currentTime, previousTime;
+double elapsedTime;
+double error;
+double lastError;
+double input, output, setPoint;
+double cumError, rateError;
+
+#define MAX_SPEED 5100
+
+void ISR1();
+void readSerial();
+int panelLED(int LEDmode);
+void blinkLED();    //NOT FINISHED
+double computePID(double inp);
+
+
+/*************************************************************************/
+void setup()
+{
+    Serial.begin(230400);
+    pinMode (MOTOR, OUTPUT);
+    pinMode (11, OUTPUT);   //for panelLED
+    pinMode (12, OUTPUT);
+    pinMode (Enc2, INPUT);
+    pinMode (Enc1, INPUT);
+    pinMode (in1, OUTPUT);
+    pinMode (in2, OUTPUT);
+    
+    panelLED(1);
+
+    digitalWrite(in1, HIGH);
+}
+
+
+/************************************************************************/
+
+
+void loop()
+{
+
+  readSerial();
+  
+  output = computePID(rpm);
+  analogWrite(MOTOR, speed);
+
+  
+
+  attachInterrupt(digitalPinToInterrupt(Enc2), ISR1, RISING);
+
+/*
+  Serial.print(speed);
+  Serial.print("\t");
+  Serial.print(kp);
+  Serial.print("\t");
+  Serial.print(ki);
+  Serial.print("\t");
+  Serial.println(kd);
+*/
+
+  Serial.print(rpm);
+  Serial.print("\t");
+  Serial.print(dutyCycle);
+  Serial.print("\t");
+  Serial.print(setSpeed);
+  Serial.print("\t");
+  Serial.print(speed);
+  Serial.print("\t");
+  Serial.println(dt);
+
+}
+
+
+/*************************************************************************************************************/
+
+
+void ISR1()
+{
+  time = micros();
+  dt = time - time_old;
+  time_old = time;
+  rpm =  5000000 / (double)dt;
+}
+
+
+int panelLED(int LEDmode)   //1=green  2=red
+{
+  switch (LEDmode)
+  {
+    default:
+    case 0:
+    {
+      digitalWrite(11, 0);
+      digitalWrite(12, 0);
+      break;
+    }
+    case 1:   //green
+    {
+      digitalWrite(11, 1);
+      digitalWrite(12, 0);
+      break;
+    }
+    case 2:   //red
+    {
+      digitalWrite(11, 0);
+      digitalWrite(12, 1);
+      break;
+    }
+  }
+ return LEDmode;
+}
+
+
+void readSerial()
+{
+
+  
+  while (Serial.available() > 0) 
+   {
+      mode = panelLED(2);
+      unsigned char inByte = Serial.read();
+      switch (inByte)
+      {
+        case '\n':
+        case '\r':
+        default:
+        break;
+        
+        case 'f':
+        {
+          digitalWrite(in1, 1);
+          digitalWrite(in2, 0);
+          break;
+        }       
+        case 'r':
+        {
+          digitalWrite(in1, 0);
+          digitalWrite(in2, 1);
+          break;
+        }
+        case 'p':
+        {
+          kp = Serial.parseInt();
+          break;
+        }
+        case 'i':
+        {
+          ki = Serial.parseInt();
+          break;
+        }
+        case 'd':
+        {
+          kd = Serial.parseInt();
+          break;
+        }
+        case 's':
+        {
+          setSpeed = Serial.parseInt();
+          setSpeed = constrain(setSpeed, 0, MAX_SPEED);
+          speed = map(setSpeed, 0, MAX_SPEED, 0, 0xFF);    //PWM is only 8 bits. Works in increments of 20 to 22 (i.e. s20=0, but s22=1)
+          dutyCycle = (float)speed * 0.3921568;
+          break;
+        }
+        case 'x':
+        {
+          int setDuty = Serial.parseInt();
+          dutyCycle = constrain(setDuty, 0, 100);
+          speed = map(dutyCycle,0,100,0,0xFF);
+          setSpeed = map(speed,0,0xFF,0,MAX_SPEED);
+          break;
+        }
+      } 
+   }
+   if(mode == 2) 
+  {
+    delay(100);
+    mode = panelLED(1);
+  }
+}
+
+double computePID(double inpSPEED)
+{
+  currentTime = millis();
+  elapsedTime = (double)(currentTime - previousTime);
+
+  error = setSpeed - inpSPEED;
+  cumError =+ error * elapsedTime;
+  rateError = (error - lastError)/elapsedTime;
+
+  double out = kp*error + ki*cumError + kd*rateError;
+
+  lastError = error;
+  previousTime = currentTime;
+
+  return out;
+
+}
+
